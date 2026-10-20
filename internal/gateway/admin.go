@@ -845,6 +845,10 @@ func (s *Server) adminModelVisibility(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
+		// Hot-apply to the lane: a model hidden from the picker must also drop
+		// out of probe rounds and the failover candidate chain immediately,
+		// not at the next restart.
+		s.Lane.SetHidden(out)
 		if s.logger != nil {
 			action := "恢复显示"
 			if in.Hidden {

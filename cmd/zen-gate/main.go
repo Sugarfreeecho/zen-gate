@@ -115,6 +115,10 @@ func main() {
 	ln.SetDefaultMaxTokens(cfg.DefaultMaxTokens)
 	ln.SetExposeRegion(cfg.ExposeRegion)
 	ln.SetFailover(cfg.FailoverEnabled, cfg.FailoverMax)
+	// Models the user unchecked stay out of probe rounds and failover: hiding
+	// them from the picker must also stop the lane from spending quota on them
+	// unattended.
+	ln.SetHidden(cfg.HiddenModels)
 	// Smart routing: master switch + failover ordering strategy + the runtime
 	// first-token sample ring that the latency strategy ranks by.
 	ln.SetSmartRouting(cfg.SmartRouting)

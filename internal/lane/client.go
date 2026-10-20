@@ -2,6 +2,7 @@ package lane
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 )
@@ -96,6 +97,7 @@ type Lane struct {
 	exposeRegion     bool
 	failoverEnabled  bool
 	failoverMax      int
+	hidden           map[string]bool
 	smartRouting     bool
 	strategy         string
 	ttft             TTFTSource
@@ -174,6 +176,7 @@ func NewLane() *Lane {
 		exposeRegion:     true,
 		failoverEnabled:  true,
 		failoverMax:      2,
+		hidden:           map[string]bool{},
 		smartRouting:     true,
 		strategy:         StrategyCatalog,
 		throttle:         NewThrottleBook(),
@@ -192,6 +195,38 @@ func (l *Lane) SetFailover(enabled bool, max int) {
 	}
 	l.failoverMax = max
 	l.mu.Unlock()
+}
+
+// SetHidden replaces the ids excluded from automatic selection. A hidden model
+// stays servable when a request names it explicitly — hiding is a statement
+// about the picker and about spending quota unattended, not a revocation — but
+// probe rounds stop sampling it and failover stops offering it as a substitute.
+func (l *Lane) SetHidden(ids []string) {
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			set[id] = true
+		}
+	}
+	l.mu.Lock()
+	l.hidden = set
+	l.mu.Unlock()
+}
+
+// probeTargets snapshots the catalog minus the models the user hid. Probing a
+// hidden model still puts a real request on the wire and still spends quota on
+// a model the user unchecked, so it must not happen.
+func (l *Lane) probeTargets() []ModelInfo {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]ModelInfo, 0, len(l.catalog))
+	for _, m := range l.catalog {
+		if l.hidden[m.ID] {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // SetThrottleUpdate wires the throttle ledger's persistence callback.
@@ -484,10 +519,12 @@ func (l *Lane) ProbeRound(ctx context.Context, manual bool) {
 		return
 	}
 	l.probing.Set(true)
-	cat := make([]ModelInfo, len(l.catalog))
-	copy(cat, l.catalog)
 	l.mu.Unlock()
 	defer l.probing.Set(false)
+	cat := l.probeTargets()
+	if len(cat) == 0 {
+		return
+	}
 
 	// 逐个探测：一次只测一个模型，测完一个立刻生效并广播——
 	// 用户看到的是模型一个接一个亮起来，而不是全轮结束后一起翻转。
@@ -880,6 +917,10 @@ func (l *Lane) nextCandidate(needs Needs, tried map[string]bool) string {
 	for k, v := range l.availability {
 		av[k] = v
 	}
+	hid := make(map[string]bool, len(l.hidden))
+	for k := range l.hidden {
+		hid[k] = true
+	}
 	smart := l.smartRouting
 	strategy := l.strategy
 	ttftFn := l.ttft
@@ -887,6 +928,11 @@ func (l *Lane) nextCandidate(needs Needs, tried map[string]bool) string {
 
 	best, bestKey := "", candidateKey{avail: 99}
 	for i, m := range cat {
+		// A hidden model is not a substitute: the user already said they do
+		// not want this one used on their behalf.
+		if hid[m.ID] {
+			continue
+		}
 		if m.SystemOne || m.Wire == "systemone" {
 			continue
 		}
