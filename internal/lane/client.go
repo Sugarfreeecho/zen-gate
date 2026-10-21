@@ -66,11 +66,14 @@ type CallRecord struct {
 	Output    int    `json:"output"`
 	Reasoning int    `json:"reasoning,omitempty"`
 	CacheRead int    `json:"cacheRead,omitempty"`
-	TTFTMs    int64  `json:"ttftMs,omitempty"`
-	DecodeMs  int64  `json:"decodeMs,omitempty"`
-	DecodeTok int    `json:"decodeTokens,omitempty"`
-	Effort    string `json:"effort,omitempty"`
-	At        int64  `json:"at"`
+	// UsageFrames is how many frames carried a usage block for this attempt.
+	// >1 means the upstream repeated it; the access log surfaces it as uf=.
+	UsageFrames int    `json:"usageFrames,omitempty"`
+	TTFTMs      int64  `json:"ttftMs,omitempty"`
+	DecodeMs    int64  `json:"decodeMs,omitempty"`
+	DecodeTok   int    `json:"decodeTokens,omitempty"`
+	Effort      string `json:"effort,omitempty"`
+	At          int64  `json:"at"`
 	// Exit records which egress actually served this physical request. Under
 	// concurrency the first question asked is always whether these requests
 	// went out through the same exit; without it you can only guess. Empty
@@ -1209,6 +1212,7 @@ func (l *Lane) record(ctx context.Context, rec CallRecord, result StreamResult, 
 	rec.Output = result.Usage.Output
 	rec.Reasoning = result.Usage.Reasoning
 	rec.CacheRead = result.Usage.CacheRead
+	rec.UsageFrames = result.Usage.Frames
 	rec.TTFTMs = firstAt
 	if result.SawText {
 		rec.DecodeTok = WindowTokens(result.Usage, result.SawReasoning)

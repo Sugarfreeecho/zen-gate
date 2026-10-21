@@ -30,6 +30,10 @@ type turnAudit struct {
 	out       int
 	reasoning int
 	cacheRead int
+	// frames totals the usage blocks the upstream sent for this turn's calls.
+	// More than one is unusual and worth seeing: the blocks are running totals,
+	// so a repeated one used to multiply the prompt instead of describing it.
+	frames    int
 	errCode   string
 	upRID     string
 	recovered bool
@@ -44,6 +48,12 @@ func (a *turnAudit) note(rec lane.CallRecord) int {
 	a.served = rec.Model
 	a.in += rec.Input
 	a.out += rec.Output
+	// A maximum, not a sum: the question this column answers is "did one
+	// response repeat its usage block", which a failover or a continuation
+	// segment must not inflate.
+	if rec.UsageFrames > a.frames {
+		a.frames = rec.UsageFrames
+	}
 	a.reasoning += rec.Reasoning
 	a.cacheRead += rec.CacheRead
 	if rec.Recovered {
@@ -67,6 +77,7 @@ type tally struct {
 	out       int
 	reasoning int
 	cacheRead int
+	frames    int
 	errCode   string
 	upRID     string
 	recovered bool
@@ -76,7 +87,7 @@ func (a *turnAudit) snapshot() tally {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return tally{attempts: a.attempts, served: a.served, in: a.in, out: a.out,
-		reasoning: a.reasoning, cacheRead: a.cacheRead, errCode: a.errCode,
+		reasoning: a.reasoning, cacheRead: a.cacheRead, frames: a.frames, errCode: a.errCode,
 		upRID: a.upRID, recovered: a.recovered}
 }
 
@@ -191,6 +202,11 @@ func (s *Server) logAccess(rid, wire string, head []byte, audit *turnAudit, rec 
 	parts = append(parts, "attempts="+strconv.Itoa(snap.attempts))
 	if snap.in > 0 || snap.out > 0 {
 		parts = append(parts, "in="+strconv.Itoa(snap.in), "out="+strconv.Itoa(snap.out))
+	}
+	// Only worth a column when the upstream repeated its usage block: that is
+	// the shape that used to inflate the numbers above.
+	if snap.frames > 1 {
+		parts = append(parts, "uf="+strconv.Itoa(snap.frames))
 	}
 	if snap.reasoning > 0 {
 		parts = append(parts, "reasoning="+strconv.Itoa(snap.reasoning))

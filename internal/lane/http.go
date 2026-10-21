@@ -694,8 +694,10 @@ func (s *streamReader) readWithTimeout(p []byte, timeout time.Duration) (int, er
 }
 
 // readSSE parses `data:` frames, dropping comments and [DONE]. Usage-bearing
-// frames are merged into the returned total (each field appears on at most a
-// couple of terminal frames, so summation matches the reference behaviour).
+// frames are absorbed, not summed: some upstreams attach their usage block to
+// every chunk, and that block is a running total, so adding the repeats turns
+// the prompt into "prompt x number of chunks". The frame count rides along in
+// Usage.Frames so a caller can tell the two situations apart.
 func readSSE(r io.Reader, onData func([]byte) error) (*Usage, error) {
 	br := bufio.NewReaderSize(r, 64*1024)
 	var usage *Usage
@@ -724,8 +726,9 @@ func readSSE(r io.Reader, onData func([]byte) error) (*Usage, error) {
 				if usage == nil {
 					usage = u
 				} else {
-					usage.Merge(u)
+					usage.Absorb(u)
 				}
+				usage.Frames++
 			}
 			if _, has := frame["error"]; has {
 				return usage, ClassifyFailure(0, jsonString(frame["error"]), 0)
@@ -817,6 +820,51 @@ func (u *Usage) Merge(o *Usage) {
 	u.CacheRead += o.CacheRead
 	u.CacheWrite += o.CacheWrite
 	u.TotalTokens += o.TotalTokens
+	// Frames is a maximum, not a sum: it answers "how many blocks did one
+	// response carry", and a continuation segment must not add to it.
+	if o.Frames > u.Frames {
+		u.Frames = o.Frames
+	}
+}
+
+// Absorb folds another usage block of the SAME response into this one, keeping
+// the larger value per field.
+//
+// Streaming upstreams that repeat their usage block report running totals, not
+// deltas: prompt_tokens stays where it was and completion_tokens climbs. Summing
+// those repeats multiplies the prompt by the number of frames — the same model
+// was measured reporting 30x to 1400x the real prompt on 1.4% of calls, which
+// then pushed clients past their compaction threshold on every turn. Taking the
+// maximum reproduces the final accounting for totals (OpenAI's terminal frame,
+// Anthropic's cumulative message_delta) and is a no-op for the single-frame case.
+//
+// Merge is the opposite operation and stays for genuinely separate requests
+// (a truncated turn's continuation segments).
+func (u *Usage) Absorb(o *Usage) {
+	if o == nil {
+		return
+	}
+	if o.Input > u.Input {
+		u.Input = o.Input
+	}
+	if o.Output > u.Output {
+		u.Output = o.Output
+	}
+	if o.Reasoning > u.Reasoning {
+		u.Reasoning = o.Reasoning
+	}
+	if o.CacheRead > u.CacheRead {
+		u.CacheRead = o.CacheRead
+	}
+	if o.CacheWrite > u.CacheWrite {
+		u.CacheWrite = o.CacheWrite
+	}
+	if o.TotalTokens > u.TotalTokens {
+		u.TotalTokens = o.TotalTokens
+	}
+	if o.Frames > u.Frames {
+		u.Frames = o.Frames
+	}
 }
 
 func jsonString(v any) string {

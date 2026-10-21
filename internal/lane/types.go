@@ -97,6 +97,11 @@ type Usage struct {
 	CacheRead   int `json:"cacheRead,omitempty"`
 	CacheWrite  int `json:"cacheWrite,omitempty"`
 	TotalTokens int `json:"totalTokens,omitempty"`
+	// Frames counts how many wire frames carried a usage block for this
+	// response. One is the healthy case (a terminal frame, or Anthropic's
+	// message_start). More than one means the upstream repeated the block, and
+	// whether those repeats are totals or deltas decides the whole accounting.
+	Frames int `json:"-"`
 }
 
 // Finish reasons.

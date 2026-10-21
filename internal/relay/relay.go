@@ -299,8 +299,11 @@ func postStreamed(ctx context.Context, p *store.Provider, session string, body m
 				if usage == nil {
 					usage = u
 				} else {
-					usage.Merge(u)
+					// Same rule as the free lane: a repeated block is a running
+					// total, so absorb it instead of adding it.
+					usage.Absorb(u)
 				}
+				usage.Frames++
 			}
 			if _, has := frame["error"]; has {
 				return usage, lane.ClassifyFailure(0, jsonString(frame["error"]), 0)
